@@ -2,7 +2,7 @@ pub fn tokenize_commands(command_string: &str) -> Vec<Vec<Vec<&str>>> {
     let commands: Vec<&str> = command_string.split(';').collect();
     let mut command_tokens: Vec<Vec<Vec<&str>>> = Vec::new();
     for command in commands.iter() {
-        let mut dependent_commands: Vec<&str> = command.split("&&").collect();
+        let dependent_commands: Vec<&str> = command.split("&&").collect();
         let mut temp_vec: Vec<Vec<&str>> = Vec::new();
         for dependent_command in dependent_commands.iter() {
             temp_vec.push(dependent_command.split_whitespace().collect());
@@ -47,7 +47,10 @@ mod tests {
 
         // TODO this case is not correct
         // it should be `assert_eq!(vec![vec![vec!["long-running-process &"]], vec![vec!["date"]]], tokens);`
-        assert_eq!(vec![vec![vec!["long-running-process", "&", "date"]]], tokens);
+        assert_eq!(
+            vec![vec![vec!["long-running-process", "&", "date"]]],
+            tokens
+        );
     }
 
     #[test]

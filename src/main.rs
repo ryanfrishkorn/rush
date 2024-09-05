@@ -1,12 +1,12 @@
 extern crate libc;
 extern crate rustyline;
 
+use rustyline::DefaultEditor;
 use std::env;
+use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
-use std::fs::File;
-use rustyline::Editor;
 
 mod colors;
 mod tokens;
@@ -19,7 +19,7 @@ fn main() {
         libc::signal(libc::SIGQUIT, libc::SIG_IGN);
     }
     let mut last_exit_status = true;
-    let mut rl = Editor::<()>::new();
+    let mut rl = DefaultEditor::new().expect("Couldn't create editor");
     let home = env::var("HOME").unwrap();
     if rl.load_history(&format!("{}/.rush_history", home)).is_err() {
         println!("No previous history.");
@@ -30,7 +30,7 @@ fn main() {
         let command_string = read_command(&mut rl, prompt_string);
         let commands = tokenize_commands(&command_string);
 
-        for mut command in commands {
+        for command in commands {
             last_exit_status = true;
             for mut dependent_command in command {
                 let mut is_background = false;
@@ -40,9 +40,10 @@ fn main() {
                 }
                 match dependent_command[0] {
                     "exit" => {
-                        rl.save_history(&format!("{}/.rush_history", home)).expect("Couldn't save history");
+                        rl.save_history(&format!("{}/.rush_history", home))
+                            .expect("Couldn't save history");
                         std::process::exit(0);
-                    },
+                    }
                     "cd" => {
                         last_exit_status = change_dir(dependent_command[1]);
                     }
@@ -50,7 +51,7 @@ fn main() {
                         last_exit_status = execute_command(dependent_command, is_background);
                     }
                 }
-                if last_exit_status == false {
+                if !last_exit_status {
                     break;
                 }
             }
@@ -58,18 +59,19 @@ fn main() {
     }
 }
 
-fn read_command(rl: &mut Editor<()>, prompt_string: String) -> String {
+fn read_command(rl: &mut DefaultEditor, prompt_string: String) -> String {
     let mut command_string = rl.readline(&prompt_string).unwrap();
 
     // this allows for multiline commands
-    while command_string.chars().last() == Some('\\') {
+    while command_string.ends_with('\\') {
         command_string.pop(); // remove the trailing backslash
         let next_string = rl.readline("").unwrap();
         command_string.push_str(&next_string);
     }
 
     // add command to history after handling multi-line input
-    rl.add_history_entry(command_string.as_ref());
+    rl.add_history_entry(&command_string)
+        .expect("add_history_entry");
     command_string
 }
 
@@ -83,57 +85,54 @@ fn generate_prompt(last_exit_status: bool) -> String {
         colors::RESET
     );
     if last_exit_status {
-        return format!(
+        format!(
             "{}{}{}\u{2ba1}{}  ",
             prompt,
             colors::ANSI_BOLD,
             colors::GREEN,
             colors::RESET
-        );
+        )
     } else {
-        return format!(
+        format!(
             "{}{}{}\u{2ba1}{}  ",
             prompt,
             colors::ANSI_BOLD,
             colors::RED,
             colors::RESET
-        );
+        )
     }
 }
 
 fn execute_command(command_tokens: Vec<&str>, is_background: bool) -> bool {
     let mut command_instance = Command::new(command_tokens[0]);
-    if let Ok(mut child) = command_instance
-        .args(&command_tokens[1..])
-        .before_exec(|| {
-            unsafe {
+    unsafe {
+        if let Ok(mut child) = command_instance
+            .args(&command_tokens[1..])
+            .pre_exec(|| {
                 libc::signal(libc::SIGINT, libc::SIG_DFL);
                 libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+                Result::Ok(())
+            })
+            .spawn()
+        {
+            if !is_background {
+                child.wait().expect("command wasn't running").success()
+            } else {
+                colors::success_logger(format!("{} started!", child.id()));
+                true
             }
-            Result::Ok(())
-        })
-        .spawn()
-    {
-        if is_background == false {
-            return child.wait().expect("command wasn't running").success();
         } else {
-            colors::success_logger(format!("{} started!", child.id()));
-            true
+            colors::error_logger("Command not found!".to_string());
+            false
         }
-    } else {
-        colors::error_logger("Command not found!".to_string());
-        false
     }
 }
 
 fn change_dir(new_path: &str) -> bool {
     let new_path = Path::new(new_path);
-    match env::set_current_dir(&new_path) {
-        Err(err) => {
-            colors::error_logger(format!("Failed to change the directory!\n{}", err));
-            return false;
-        }
-        _ => (),
+    if let Err(err) = env::set_current_dir(new_path) {
+        colors::error_logger(format!("Failed to change the directory!\n{}", err));
+        return false;
     }
-    return true;
+    true
 }
