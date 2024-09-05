@@ -105,9 +105,10 @@ fn generate_prompt(last_exit_status: bool) -> String {
 
 fn execute_command(command_tokens: Vec<&str>, is_background: bool) -> bool {
     let mut command_instance = Command::new(command_tokens[0]);
+    let command = command_instance.args(&command_tokens[1..]);
+
     unsafe {
-        if let Ok(mut child) = command_instance
-            .args(&command_tokens[1..])
+        if let Ok(mut child) = command
             .pre_exec(|| {
                 libc::signal(libc::SIGINT, libc::SIG_DFL);
                 libc::signal(libc::SIGQUIT, libc::SIG_DFL);
