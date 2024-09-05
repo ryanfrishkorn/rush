@@ -1,33 +1,60 @@
 extern crate libc;
 extern crate rustyline;
+extern crate thiserror;
 
 use rustyline::DefaultEditor;
 use std::env;
+use std::error::Error;
 use std::fs::File;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
+use thiserror::Error as ThisError;
 
 mod colors;
 mod tokens;
 
 use tokens::tokenize_commands;
 
+#[derive(ThisError, Debug)]
+enum ProgramError {
+    #[error("Error processing readline input from prompt")]
+    Readline(String),
+}
+
 fn main() {
+    unsafe {
+        libc::signal(libc::SIGINT, libc::SIG_IGN);
+        libc::signal(libc::SIGQUIT, libc::SIG_IGN);
+    }
+    match main_loop() {
+        Ok(_) => std::process::exit(0),
+        Err(e) => {
+            eprintln!("error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn main_loop() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         libc::signal(libc::SIGINT, libc::SIG_IGN);
         libc::signal(libc::SIGQUIT, libc::SIG_IGN);
     }
     let mut last_exit_status = true;
     let mut rl = DefaultEditor::new().expect("Couldn't create editor");
-    let home = env::var("HOME").unwrap();
+    let home = match env::var("HOME") {
+        Ok(v) => v,
+        Err(e) => panic!("{}", e),
+    };
+
     if rl.load_history(&format!("{}/.rush_history", home)).is_err() {
         println!("No previous history.");
         File::create(format!("{}/.rush_history", home)).expect("Couldn't create history file");
     }
     loop {
         let prompt_string = generate_prompt(last_exit_status);
-        let command_string = read_command(&mut rl, prompt_string);
+        let command_string = read_command(&mut rl, prompt_string)?;
         let commands = tokenize_commands(&command_string);
 
         for command in commands {
@@ -59,8 +86,15 @@ fn main() {
     }
 }
 
-fn read_command(rl: &mut DefaultEditor, prompt_string: String) -> String {
-    let mut command_string = rl.readline(&prompt_string).unwrap();
+fn read_command(rl: &mut DefaultEditor, prompt_string: String) -> Result<String, Box<dyn Error>> {
+    let mut command_string = match rl.readline(&prompt_string) {
+        Ok(v) => v,
+        Err(_) => {
+            return Err(Box::new(ProgramError::Readline(
+                "error during readline()".to_string(),
+            )))
+        }
+    };
 
     // this allows for multiline commands
     while command_string.ends_with('\\') {
@@ -72,7 +106,7 @@ fn read_command(rl: &mut DefaultEditor, prompt_string: String) -> String {
     // add command to history after handling multi-line input
     rl.add_history_entry(&command_string)
         .expect("add_history_entry");
-    command_string
+    Ok(command_string)
 }
 
 fn generate_prompt(last_exit_status: bool) -> String {
